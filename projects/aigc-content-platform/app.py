@@ -1181,6 +1181,7 @@ class AIGCService:
                 item["last_sync_result"] = json.loads(item.get("last_sync_result") or "{}")
             except json.JSONDecodeError:
                 item["last_sync_result"] = {}
+            item["auth_env_configured"] = bool(item.get("auth_env") and os.getenv(item["auth_env"]))
             result.append(item)
         return result
 
@@ -1217,6 +1218,35 @@ class AIGCService:
         result = dict(updated)
         self._audit("connector.update", "connector", connector_id, str(payload.get("actor") or "admin"),
                     {key: value for key, value in fields.items() if key != "endpoint"})
+        return result
+
+    def check_connector(self, connector_id: str, actor: str = "admin") -> dict:
+        with self._connect() as db:
+            connector = db.execute("SELECT * FROM connectors WHERE id=?", (connector_id,)).fetchone()
+        if not connector:
+            raise ValidationError("来源连接器不存在")
+        official = connector["mode"] == "official_api"
+        auth_env = str(connector["auth_env"] or "").strip()
+        checks = {
+            "enabled": bool(connector["enabled"]),
+            "authorized": connector["authorization_status"] == "approved",
+            "endpoint": bool(str(connector["endpoint"] or "").strip()) if official else True,
+            "api_key": bool(os.getenv(auth_env)) if auth_env else True,
+        }
+        messages = []
+        if not checks["authorized"]:
+            messages.append("来源尚未授权")
+        if not checks["enabled"]:
+            messages.append("来源未启用")
+        if not checks["endpoint"]:
+            messages.append("缺少官方 API 地址")
+        if auth_env and not checks["api_key"]:
+            messages.append(f"缺少环境变量 {auth_env}")
+        ready = all(checks.values())
+        result = {"id": connector_id, "ready": ready, "checks": checks,
+                  "auth_env": auth_env, "message": "配置完整" if ready else "；".join(messages)}
+        self._audit("connector.check", "connector", connector_id, actor,
+                    {"ready": ready, "checks": checks})
         return result
 
     def _set_connector_sync_state(self, connector_id: str, status: str, result: dict) -> None:
@@ -1640,6 +1670,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._require_admin(payload); return self._send(200, self.service.rollback_template(match.group(1), payload.get("version"), payload.get("actor", "admin")))
             if parsed.path == "/api/admin/models":
                 self._require_admin(payload); return self._send(201, self.service.create_model(payload))
+            match = re.fullmatch(r"/api/admin/connectors/([^/]+)/check", parsed.path)
+            if match:
+                self._require_admin(payload); return self._send(200, self.service.check_connector(match.group(1), payload.get("actor", "admin")))
             match = re.fullmatch(r"/api/admin/connectors/([^/]+)/sync", parsed.path)
             if match:
                 self._require_admin(payload); return self._send(201, self.service.sync_connector(match.group(1), payload.get("actor", "admin")))

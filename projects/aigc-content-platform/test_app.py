@@ -495,6 +495,27 @@ def test_connector_cannot_enable_without_authorization(service):
     assert any(item["action"] == "connector.update" for item in service.audit_logs())
 
 
+def test_connector_configuration_check_never_returns_secret(service, monkeypatch):
+    connector = service.list_connectors()[0]
+    service.set_connector(connector["id"], {
+        "authorization_status": "approved", "enabled": 1, "mode": "official_api",
+        "endpoint": "https://source.example/api", "auth_env": "SOURCE_API_KEY",
+    })
+    monkeypatch.delenv("SOURCE_API_KEY", raising=False)
+    missing = service.check_connector(connector["id"])
+    assert missing["ready"] is False
+    assert missing["checks"]["api_key"] is False
+    assert "SOURCE_API_KEY" in missing["message"]
+    assert "secret" not in json.dumps(missing).lower()
+    monkeypatch.setenv("SOURCE_API_KEY", "source-secret")
+    ready = service.check_connector(connector["id"])
+    assert ready["ready"] is True
+    assert ready["checks"]["api_key"] is True
+    assert ready["auth_env"] == "SOURCE_API_KEY"
+    assert service.list_connectors()[0]["auth_env_configured"] is True
+    assert any(item["action"] == "connector.check" for item in service.audit_logs())
+
+
 def test_model_configuration_check_is_non_billing(service, monkeypatch):
     service.set_model("qwen-image", {"enabled": 1, "adapter": "qwen_http", "remote_model_id": "qwen-image-3.0-pro"})
     monkeypatch.setenv("QWEN_ENDPOINT", "https://qwen.test/images/generations")
