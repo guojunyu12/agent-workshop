@@ -353,7 +353,7 @@ def test_real_doubao_adapter_downloads_image_and_records_real_receipt(service, m
     service.set_model("doubao-seedream", {
         "enabled": 1,
         "adapter": "doubao_http",
-        "remote_model_id": "doubao-seedream-5-0-260128",
+        "remote_model_id": "doubao-seedream-5-0-lite-260128",
         "auth_env": "ARK_API_KEY",
         "endpoint": "https://ark.test/api/v3/images/generations",
     })
@@ -401,7 +401,7 @@ def test_real_doubao_adapter_downloads_image_and_records_real_receipt(service, m
     assert len(calls) == 2
     request_body = json.loads(calls[0].data.decode())
     assert calls[0].full_url == "https://ark.test/api/v3/images/generations"
-    assert request_body["model"] == "doubao-seedream-5-0-260128"
+    assert request_body["model"] == "doubao-seedream-5-0-lite-260128"
     assert request_body["size"] == "1290x2796"
     assert request_body["response_format"] == "url"
     assert request_body["image"] == "data:image/png;base64,QUJD"

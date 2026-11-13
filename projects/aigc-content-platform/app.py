@@ -651,7 +651,7 @@ class AIGCService:
         if not prompt:
             raise ValidationError("真实生图需要提供提示词")
         request_body = {
-            "model": model["remote_model_id"] or "doubao-seedream-3-0-t2i-250415",
+            "model": model["remote_model_id"] or "doubao-seedream-5-0-lite-260128",
             "prompt": prompt[:2000],
             "size": f"{size['width']}x{size['height']}",
             "response_format": "url",

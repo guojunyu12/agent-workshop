@@ -64,7 +64,7 @@ export ARK_API_KEY='你的方舟 API Key'
 python3 app.py
 ```
 
-在管理端“模型配置”中选择 `豆包 Seedream HTTP`，填写远端模型 ID（例如控制台提供的 `doubao-seedream-5-0-260128`），接口地址可留空，默认使用 `https://ark.cn-beijing.volces.com/api/v3/images/generations`；密钥环境变量名默认使用 `ARK_API_KEY`，也可以在页面改成其他环境变量名。缺少密钥时，“检查配置”会提示待配置，生成不会静默退回 Mock。
+在管理端“模型配置”中选择 `豆包 Seedream HTTP`，填写控制台实际提供的远端模型 ID（例如 `doubao-seedream-5-0-lite-260128`），接口地址可留空，默认使用 `https://ark.cn-beijing.volces.com/api/v3/images/generations`；密钥环境变量名默认使用 `ARK_API_KEY`，也可以在页面改成其他环境变量名。缺少密钥时，“检查配置”会提示待配置，生成不会静默退回 Mock。
 
 豆包适配器发送标准图片生成请求，支持提示词、尺寸和参考图，并会把返回的 URL 或 Base64 图片保存到本地 PNG。接口字段和模型 ID 以火山方舟官方图片生成 API 为准：<https://docs.volcengine.com/docs/ark/image-generation-api?lang=zh&redirect=1>。
 
