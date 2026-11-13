@@ -105,6 +105,8 @@ curl 'http://127.0.0.1:8000/api/admin/usage?provider=doubao&model_id=doubao-seed
 
 模板审核可以启用 `SenseNova 6.8 Flash Lite` 的“商汤审核 Chat”适配器，接口地址为 `https://token.sensenova.cn/v1/chat/completions`。候选模板详情中的“AI 预审”只会保存 `pass/flag`、原因和分类供审核员参考，不会自动发布；接口为 `POST /api/admin/templates/candidates/{id}/ai-review`。
 
+候选模板人工导入、批量导入和官方 API 同步都会写入审计日志。官方 API 连接器会记录最近一次同步状态、时间、批次、新增数和重复数；失败时会保留错误信息，方便运营人员定位来源问题。审核通过生成的正式模板会同时创建初始版本快照，后续编辑和回滚继续递增版本号。
+
 商汤 `SenseNova 6.8 Flash Lite` 可选择“商汤审核 Chat”，接口地址填写 `https://token.sensenova.cn/v1/chat/completions`。模板审核队列中的“AI 预审”只会保存 `passed/flagged` 结果供管理员参考，不会自动发布模板；接口为 `POST /api/admin/templates/candidates/{id}/ai-review`。
 
 模板抓取应优先接官方 API 或人工导入；未确认授权的平台不能直接做无授权页面抓取。官方 API 连接器可配置密钥环境变量名，密钥只从运行环境读取，不写入数据库。

@@ -181,6 +181,8 @@ class AIGCService:
                   mode TEXT NOT NULL DEFAULT 'manual', enabled INTEGER NOT NULL DEFAULT 0,
                   authorization_status TEXT NOT NULL DEFAULT 'pending', endpoint TEXT NOT NULL DEFAULT '',
                   auth_env TEXT NOT NULL DEFAULT '',
+                  last_sync_at TEXT, last_sync_status TEXT NOT NULL DEFAULT 'never',
+                  last_sync_result TEXT NOT NULL DEFAULT '{}',
                   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE TABLE IF NOT EXISTS usage (
@@ -245,6 +247,12 @@ class AIGCService:
             connector_columns = {row[1] for row in db.execute("PRAGMA table_info(connectors)").fetchall()}
             if "auth_env" not in connector_columns:
                 db.execute("ALTER TABLE connectors ADD COLUMN auth_env TEXT NOT NULL DEFAULT ''")
+            if "last_sync_at" not in connector_columns:
+                db.execute("ALTER TABLE connectors ADD COLUMN last_sync_at TEXT")
+            if "last_sync_status" not in connector_columns:
+                db.execute("ALTER TABLE connectors ADD COLUMN last_sync_status TEXT NOT NULL DEFAULT 'never'")
+            if "last_sync_result" not in connector_columns:
+                db.execute("ALTER TABLE connectors ADD COLUMN last_sync_result TEXT NOT NULL DEFAULT '{}'")
             generation_columns = {row[1] for row in db.execute("PRAGMA table_info(generations)").fetchall()}
             if "negative_prompt" not in generation_columns:
                 db.execute("ALTER TABLE generations ADD COLUMN negative_prompt TEXT NOT NULL DEFAULT ''")
@@ -844,6 +852,9 @@ class AIGCService:
                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                        (candidate_id, module, payload.get("title") or "未命名模板", prompt_template, json.dumps(risk_flags, ensure_ascii=False), source_url,
                         payload.get("copyright_status", "pending"), fingerprint, batch_id, "pending_review", "", connector_id))
+        self._audit("candidate.ingest", "candidate", candidate_id, str(payload.get("actor") or "admin"),
+                    {"module": module, "batch_id": batch_id, "connector_id": connector_id,
+                     "source_url": source_url, "fingerprint": fingerprint})
         return {"id": candidate_id, "status": "pending_review", "batch_id": batch_id, "connector_id": connector_id}
 
     def ingest_candidates_batch(self, payload: dict) -> dict:
@@ -878,13 +889,16 @@ class AIGCService:
                 template_id = f"candidate-{candidate_id}"
                 db.execute("INSERT INTO templates(id,module,title,source_url,status,copyright_status,prompt_template) VALUES(?,?,?,?,?,?,?)",
                            (template_id, row["module"], row["title"], row["source_url"], "published", row["copyright_status"], row["prompt_template"]))
+                db.execute("INSERT INTO template_versions(template_id,version,title,prompt_template,status) VALUES(?,?,?,?,?)",
+                           (template_id, 1, row["title"], row["prompt_template"], "published"))
                 db.execute("UPDATE candidates SET publish_status='internal_published', publish_result=?, published_at=CURRENT_TIMESTAMP WHERE id=?",
                            (json.dumps({"mode": "internal", "template_id": template_id}, ensure_ascii=False), candidate_id))
             else:
                 db.execute("UPDATE candidates SET publish_status='not_published', publish_result='{}', published_at=NULL, publish_connector_id='' WHERE id=?",
                            (candidate_id,))
         self._audit(f"candidate.{decision}", "candidate", candidate_id, reviewer,
-                    {"status": status, "source_url": row["source_url"], "reason": str(reason or "").strip()[:500]})
+                    {"status": status, "source_url": row["source_url"], "reason": str(reason or "").strip()[:500],
+                     "template_id": f"candidate-{candidate_id}" if decision == "approved" else ""})
         return {"id": candidate_id, "status": status, "reviewed_at": reviewed_at,
                 "publish_status": "internal_published" if decision == "approved" else "not_published"}
 
@@ -1160,7 +1174,15 @@ class AIGCService:
     def list_connectors(self) -> list[dict]:
         with self._connect() as db:
             rows = db.execute("SELECT * FROM connectors ORDER BY name").fetchall()
-        return [dict(row) for row in rows]
+        result = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["last_sync_result"] = json.loads(item.get("last_sync_result") or "{}")
+            except json.JSONDecodeError:
+                item["last_sync_result"] = {}
+            result.append(item)
+        return result
 
     def set_connector(self, connector_id: str, payload: dict) -> dict:
         allowed = {"enabled", "mode", "authorization_status", "endpoint", "auth_env"}
@@ -1197,6 +1219,11 @@ class AIGCService:
                     {key: value for key, value in fields.items() if key != "endpoint"})
         return result
 
+    def _set_connector_sync_state(self, connector_id: str, status: str, result: dict) -> None:
+        with self._connect() as db:
+            db.execute("UPDATE connectors SET last_sync_status=?, last_sync_result=?, last_sync_at=CURRENT_TIMESTAMP WHERE id=?",
+                       (status, json.dumps(result, ensure_ascii=False), connector_id))
+
     def sync_connector(self, connector_id: str, actor: str = "admin") -> dict:
         with self._connect() as db:
             connector = db.execute("SELECT * FROM connectors WHERE id=?", (connector_id,)).fetchone()
@@ -1211,6 +1238,7 @@ class AIGCService:
         endpoint = str(connector["endpoint"] or "").strip()
         if not endpoint:
             raise ValidationError("官方 API 连接器缺少接口地址")
+        self._set_connector_sync_state(connector_id, "running", {})
         headers = {"Accept": "application/json"}
         auth_env = str(connector["auth_env"] or "").strip()
         if auth_env:
@@ -1223,11 +1251,15 @@ class AIGCService:
             with urllib.request.urlopen(request, timeout=30) as response:
                 body = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            detail = str(exc)[:300]
+            self._set_connector_sync_state(connector_id, "failed", {"error": detail})
+            self._audit("connector.sync_failed", "connector", connector_id, actor, {"error": detail})
             raise ValidationError(f"来源连接器抓取失败：{exc}") from exc
         items = (body.get("items") or body.get("data")) if isinstance(body, dict) else body
         if isinstance(items, dict):
             items = items.get("items") or items.get("data")
         if not isinstance(items, list) or not items:
+            self._set_connector_sync_state(connector_id, "failed", {"error": "官方 API 返回中没有可导入的模板列表"})
             raise ValidationError("官方 API 返回中没有可导入的模板列表")
         normalized = []
         for item in items[:100]:
@@ -1240,10 +1272,15 @@ class AIGCService:
                 normalized.append({"module": module, "title": title, "source_url": source_url,
                                    "prompt_template": str(item.get("prompt_template") or item.get("prompt") or "").strip()[:2000]})
         if not normalized:
+            self._set_connector_sync_state(connector_id, "failed", {"error": "官方 API 返回的模板缺少合法 module、title 或 source_url"})
             raise ValidationError("官方 API 返回的模板缺少合法 module、title 或 source_url")
         batch_id = f"sync-{uuid.uuid4().hex[:8]}"
         imported = self.ingest_candidates_batch({"items": normalized, "batch_id": batch_id, "connector_id": connector_id})
         result = {"connector_id": connector_id, "batch_id": batch_id, **imported}
+        self._set_connector_sync_state(connector_id, "succeeded", {
+            "batch_id": batch_id, "created": result["created"], "duplicates": result["duplicates"],
+            "total": result["total"],
+        })
         self._audit("connector.sync", "connector", connector_id, actor,
                     {"batch_id": batch_id, "created": result["created"], "duplicates": result["duplicates"]})
         return result

@@ -408,6 +408,9 @@ def test_approved_candidate_records_internal_publish_status(service):
     row = next(item for item in service.candidates() if item["id"] == candidate["id"])
     assert row["publish_status"] == "internal_published"
     assert row["publish_result"]["mode"] == "internal"
+    assert service.list_template_versions(f"candidate-{candidate['id']}")[0]["version"] == 1
+    assert any(item["action"] == "candidate.ingest" for item in service.audit_logs())
+    assert any(item["action"] == "candidate.approved" for item in service.audit_logs())
 
 
 def test_publish_candidate_uses_only_authorized_official_connector(service, monkeypatch):
@@ -675,6 +678,10 @@ def test_official_connector_sync_imports_json_templates_and_deduplicates(service
     assert len(service.candidates(status="pending_review")) == 2
     assert all(item["connector_id"] == connector["id"] for item in service.candidates())
     assert any(item["action"] == "connector.sync" for item in service.audit_logs())
+    connector_state = next(item for item in service.list_connectors() if item["id"] == connector["id"])
+    assert connector_state["last_sync_status"] == "succeeded"
+    assert connector_state["last_sync_result"]["created"] == 0
+    assert connector_state["last_sync_at"]
 
 
 def test_official_connector_sync_reads_auth_from_environment(service, monkeypatch):
@@ -707,6 +714,21 @@ def test_official_connector_sync_reads_auth_from_environment(service, monkeypatc
 
     assert result["created"] == 1
     assert service.list_connectors()[0]["auth_env"] == "SOURCE_API_KEY"
+
+
+def test_official_connector_sync_records_failure_state(service, monkeypatch):
+    connector = service.list_connectors()[0]
+    service.set_connector(connector["id"], {
+        "authorization_status": "approved", "enabled": 1,
+        "mode": "official_api", "endpoint": "https://source.example/templates",
+    })
+    monkeypatch.setattr(app_module.urllib.request, "urlopen", lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("upstream timeout")))
+    with pytest.raises(ValidationError, match="来源连接器抓取失败"):
+        service.sync_connector(connector["id"], "admin")
+    connector_state = next(item for item in service.list_connectors() if item["id"] == connector["id"])
+    assert connector_state["last_sync_status"] == "failed"
+    assert "upstream timeout" in connector_state["last_sync_result"]["error"]
+    assert any(item["action"] == "connector.sync_failed" for item in service.audit_logs())
 
 
 def test_admin_can_create_a_disabled_custom_model(service):
