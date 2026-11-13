@@ -429,6 +429,8 @@ class AIGCService:
             return self._generate_qwen(model, payload, template_id, size)
         if model["adapter"] == "sensenova_http":
             return self._generate_sensenova(model, payload, template_id, size)
+        if model["adapter"] == "doubao_http":
+            return self._generate_doubao(model, payload, template_id, size)
         generation_id = uuid.uuid4().hex[:12]
         output = self.output_dir / f"{generation_id}.svg"
         prompt = str(payload.get("prompt") or "").strip()[:160]
@@ -611,6 +613,88 @@ class AIGCService:
                 output.write_bytes(response.read())
         except (urllib.error.URLError, TimeoutError) as exc:
             raise ValidationError(f"下载千问图片失败：{exc}") from exc
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO usage(module,provider,model_id,template_id,user_id,status,tokens,credits,cost) VALUES(?,?,?,?,?,?,?,?,?)",
+                (payload["module"], model["provider"], payload.get("model_id", model["id"]), template_id,
+                 payload.get("user_id", "anonymous"), "succeeded", usage_meta["tokens"], 1, usage_meta["cost"]),
+            )
+        result = {"id": generation_id, "status": "succeeded", "module": payload["module"],
+                  "model_id": payload.get("model_id", model["id"]), "size": size,
+                  "output_path": str(output), "output_url": f"/outputs/{output.name}", "credits": 1,
+                  "runtime": {"mode": "real", "label": "真实调用", "actual_call": True,
+                               "provider": model["provider"], "provider_name": PROVIDER_NAMES.get(model["provider"], model["provider"]),
+                               "model_name": model["name"], "remote_model_id": model["remote_model_id"],
+                               "model_id": payload.get("model_id", model["id"]), "endpoint_configured": True,
+                               "usage": usage_meta, "reference_image_attached": bool(payload.get("reference_image")),
+                               "negative_prompt_attached": bool(payload.get("negative_prompt"))}}
+        self._record_generation(payload, result)
+        return result
+
+    def _generate_doubao(self, model, payload: dict, template_id: str, size: dict) -> dict:
+        """Call Volcengine Ark's OpenAI-compatible Seedream image endpoint.
+
+        The API key is deliberately read from an environment variable and is
+        never persisted in the database or returned to the browser.  The
+        endpoint can be overridden per model; otherwise ARK_ENDPOINT or the
+        official Beijing Ark endpoint is used.
+        """
+        endpoint = str(model["endpoint"] or os.getenv("ARK_ENDPOINT") or
+                       "https://ark.cn-beijing.volces.com/api/v3/images/generations").rstrip("/")
+        if not endpoint.endswith("/images/generations"):
+            endpoint = f"{endpoint}/images/generations"
+        auth_env = model["auth_env"] or "ARK_API_KEY"
+        api_key = os.getenv(auth_env)
+        if not api_key:
+            raise ValidationError(f"豆包真实适配器未配置：请设置 {auth_env}")
+        prompt = str(payload.get("prompt") or "").strip()
+        if not prompt:
+            raise ValidationError("真实生图需要提供提示词")
+        request_body = {
+            "model": model["remote_model_id"] or "doubao-seedream-3-0-t2i-250415",
+            "prompt": prompt[:2000],
+            "size": f"{size['width']}x{size['height']}",
+            "response_format": "url",
+            "watermark": False,
+        }
+        if payload.get("reference_image"):
+            request_body["image"] = payload["reference_image"]
+        request = urllib.request.Request(endpoint, data=json.dumps(request_body).encode("utf-8"), headers={
+            "Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
+        }, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=int(model["timeout_seconds"] or 120)) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = f"HTTP {exc.code}"
+            try:
+                error_body = json.loads(exc.read().decode("utf-8", "replace"))
+                if isinstance(error_body, dict):
+                    provider_code = str(error_body.get("code") or error_body.get("error", {}).get("code") or "").strip()
+                    provider_message = str(error_body.get("message") or error_body.get("error", {}).get("message") or "").strip()
+                    if provider_code:
+                        detail += f" {provider_code}"
+                    if provider_message:
+                        detail += f": {provider_message}"
+            except (OSError, UnicodeError, json.JSONDecodeError, AttributeError):
+                pass
+            raise ValidationError(f"豆包真实生图调用失败：{detail}") from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise ValidationError(f"豆包真实生图调用失败：{exc}") from exc
+        image_url, image_bytes = self._extract_image(body)
+        if not image_url and not image_bytes:
+            raise ValidationError("豆包真实生图返回中没有图片 URL 或 Base64 图片")
+        usage_meta = self._parse_provider_usage(body, model)
+        generation_id = uuid.uuid4().hex[:12]
+        output = self.output_dir / f"{generation_id}.png"
+        try:
+            if image_bytes:
+                output.write_bytes(image_bytes)
+            else:
+                with urllib.request.urlopen(image_url, timeout=int(model["timeout_seconds"] or 120)) as response:
+                    output.write_bytes(response.read())
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise ValidationError(f"下载豆包图片失败：{exc}") from exc
         with self._connect() as db:
             db.execute(
                 "INSERT INTO usage(module,provider,model_id,template_id,user_id,status,tokens,credits,cost) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -1383,6 +1467,13 @@ class AIGCService:
                 has_credentials = endpoint_configured and bool(os.getenv("QWEN_API_KEY"))
                 runtime_mode = "real" if has_credentials else "real-pending"
                 runtime_label = "真实适配器 · 已配置" if has_credentials else "真实适配器 · 待配置"
+            elif row["adapter"] == "doubao_http":
+                endpoint_configured = bool(os.getenv("ARK_ENDPOINT") or row["endpoint"] or
+                                           "https://ark.cn-beijing.volces.com/api/v3/images/generations")
+                auth_env = row["auth_env"] or "ARK_API_KEY"
+                has_credentials = endpoint_configured and bool(os.getenv(auth_env))
+                runtime_mode = "real" if has_credentials else "real-pending"
+                runtime_label = "真实适配器 · 已配置" if has_credentials else "真实适配器 · 待配置"
             elif row["adapter"] in {"sensenova_http", "sensenova_chat"}:
                 endpoint_configured = bool(row["endpoint"])
                 has_credentials = endpoint_configured and bool(os.getenv(row["auth_env"]) if row["auth_env"] else False)
@@ -1441,6 +1532,8 @@ class AIGCService:
                 raise ValidationError("模型不存在")
             if fields.get("adapter") == "qwen_http" and model["provider"] != "qwen":
                 raise ValidationError("千问 HTTP 适配器只能绑定千问模型")
+            if fields.get("adapter") == "doubao_http" and model["provider"] != "doubao":
+                raise ValidationError("豆包 HTTP 适配器只能绑定豆包模型")
             if fields.get("adapter") in {"sensenova_http", "sensenova_chat"} and model["provider"] != "sensenova":
                 raise ValidationError("商汤适配器只能绑定商汤模型")
             if fields.get("fallback_model_id"):
@@ -1470,10 +1563,12 @@ class AIGCService:
             raise ValidationError("供应商和模型名称不能为空")
         if role not in {"image", "understanding"}:
             raise ValidationError("模型角色只能是 image 或 understanding")
-        if adapter not in {"mock", "qwen_http", "sensenova_http", "sensenova_chat"}:
+        if adapter not in {"mock", "qwen_http", "doubao_http", "sensenova_http", "sensenova_chat"}:
             raise ValidationError("暂不支持该模型适配器")
         if adapter == "qwen_http" and provider != "qwen":
             raise ValidationError("千问 HTTP 适配器只能绑定千问供应商")
+        if adapter == "doubao_http" and provider != "doubao":
+            raise ValidationError("豆包 HTTP 适配器只能绑定豆包供应商")
         if adapter in {"sensenova_http", "sensenova_chat"} and provider != "sensenova":
             raise ValidationError("商汤适配器只能绑定商汤供应商")
         try:
@@ -1556,6 +1651,15 @@ class AIGCService:
                 messages.append("缺少 QWEN_ENDPOINT 或后台接口地址")
             if not checks["api_key"]:
                 messages.append("缺少 QWEN_API_KEY")
+        elif model["adapter"] == "doubao_http":
+            checks["endpoint"] = bool(os.getenv("ARK_ENDPOINT") or model["endpoint"] or
+                                       "https://ark.cn-beijing.volces.com/api/v3/images/generations")
+            auth_env = model["auth_env"] or "ARK_API_KEY"
+            checks["api_key"] = bool(os.getenv(auth_env))
+            if not checks["endpoint"]:
+                messages.append("缺少 ARK_ENDPOINT 或后台接口地址")
+            if not checks["api_key"]:
+                messages.append(f"缺少 {auth_env}")
         elif model["adapter"] in {"sensenova_http", "sensenova_chat"}:
             checks["endpoint"] = bool(model["endpoint"])
             checks["api_key"] = bool(model["auth_env"] and os.getenv(model["auth_env"]))

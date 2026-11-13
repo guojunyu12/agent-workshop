@@ -328,6 +328,87 @@ def test_real_qwen_adapter_downloads_image_and_records_real_receipt(service, mon
     assert usage["credits"] == 1 and usage["cost"] == 0.18 and usage["tokens"] == 20
 
 
+def test_real_doubao_adapter_requires_credentials_instead_of_silent_mock(service, monkeypatch):
+    service.set_model("doubao-seedream", {"adapter": "doubao_http"})
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_ENDPOINT", raising=False)
+
+    model = next(item for item in service.models() if item["id"] == "doubao-seedream")
+    assert model["runtime_mode"] == "real-pending"
+    assert model["runtime_label"] == "真实适配器 · 待配置"
+    check = service.check_model("doubao-seedream")
+    assert check["ready"] is False
+    assert "ARK_API_KEY" in check["message"]
+    with pytest.raises(ValidationError, match="豆包真实适配器未配置"):
+        service.generate({
+            "module": "emoji",
+            "template_id": "emoji-default",
+            "prompt": "测试",
+            "model_id": "doubao-seedream",
+            "user_id": "u1",
+        })
+
+
+def test_real_doubao_adapter_downloads_image_and_records_real_receipt(service, monkeypatch):
+    service.set_model("doubao-seedream", {
+        "enabled": 1,
+        "adapter": "doubao_http",
+        "remote_model_id": "doubao-seedream-5-0-260128",
+        "auth_env": "ARK_API_KEY",
+        "endpoint": "https://ark.test/api/v3/images/generations",
+    })
+    monkeypatch.setenv("ARK_API_KEY", "test-ark-key")
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self):
+            return self.body
+
+    def fake_urlopen(request, timeout=0):
+        calls.append(request)
+        if isinstance(request, str):
+            return FakeResponse(b"PNG-DATA")
+        assert request.headers["Authorization"] == "Bearer test-ark-key"
+        return FakeResponse(json.dumps({
+            "data": [{"url": "https://ark.test/image.png"}],
+            "usage": {"total_tokens": 17, "cost": 0.22},
+        }).encode())
+
+    monkeypatch.setattr(app_module.urllib.request, "urlopen", fake_urlopen)
+    result = service.generate({
+        "module": "mobile_wallpaper",
+        "template_id": "mobile-default",
+        "prompt": "测试豆包",
+        "model_id": "doubao-seedream",
+        "user_id": "u1",
+        "reference_image": "data:image/png;base64,QUJD",
+    })
+
+    assert result["runtime"]["mode"] == "real"
+    assert result["runtime"]["actual_call"] is True
+    assert result["runtime"]["usage"]["tokens"] == 17
+    assert result["runtime"]["usage"]["cost"] == 0.22
+    assert Path(result["output_path"]).read_bytes() == b"PNG-DATA"
+    assert len(calls) == 2
+    request_body = json.loads(calls[0].data.decode())
+    assert calls[0].full_url == "https://ark.test/api/v3/images/generations"
+    assert request_body["model"] == "doubao-seedream-5-0-260128"
+    assert request_body["size"] == "1290x2796"
+    assert request_body["response_format"] == "url"
+    assert request_body["image"] == "data:image/png;base64,QUJD"
+    usage = service.usage({"module": "mobile_wallpaper"})
+    assert usage["credits"] == 1 and usage["cost"] == 0.22 and usage["tokens"] == 17
+
+
 def test_generate_rejects_unsafe_custom_size(service):
     with pytest.raises(ValidationError, match="安全范围"):
         service.generate({

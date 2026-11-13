@@ -55,6 +55,19 @@ curl -X POST http://127.0.0.1:8000/api/admin/models/qwen-image \
 
 如果供应商响应包含 `usage.total_tokens` 或 `input_tokens`/`output_tokens`，系统会写入真实 Token 数；供应商返回成本时优先使用供应商成本，否则使用后台模型配置的单次成本。
 
+## 切换到豆包 Seedream 真实生图
+
+内置 `doubao-seedream` 默认仍是开发测试 Mock。要调用火山方舟的 Doubao Seedream，请先在方舟控制台开通对应模型，并把 API Key 写入启动环境（不要写入 SQLite 或前端）：
+
+```bash
+export ARK_API_KEY='你的方舟 API Key'
+python3 app.py
+```
+
+在管理端“模型配置”中选择 `豆包 Seedream HTTP`，填写远端模型 ID（例如控制台提供的 `doubao-seedream-5-0-260128`），接口地址可留空，默认使用 `https://ark.cn-beijing.volces.com/api/v3/images/generations`；密钥环境变量名默认使用 `ARK_API_KEY`，也可以在页面改成其他环境变量名。缺少密钥时，“检查配置”会提示待配置，生成不会静默退回 Mock。
+
+豆包适配器发送标准图片生成请求，支持提示词、尺寸和参考图，并会把返回的 URL 或 Base64 图片保存到本地 PNG。接口字段和模型 ID 以火山方舟官方图片生成 API 为准：<https://docs.volcengine.com/docs/ark/image-generation-api?lang=zh&redirect=1>。
+
 模型配置中的每日限额按“用户 + 模型”统计当天成功调用次数；设置为 `0` 表示不限制，达到限额后会拒绝新的生成请求。
 
 用户端支持上传 PNG/JPG/WebP 参考图（最大 10 MB）；真实 Qwen 调用会以 Base64 `image` 参数发送，Mock 只记录已附加参考图的状态。
@@ -91,7 +104,7 @@ curl 'http://127.0.0.1:8000/api/admin/usage?provider=doubao&model_id=doubao-seed
 
 后台 API 的示例角色头为 `X-Admin-Role: admin`；当前是最小权限门禁，正式环境还需要接入登录和角色系统。
 
-后台“模型配置”还支持新增自定义模型。新模型默认未启用，接口为 `POST /api/admin/models`；目前真实 HTTP 适配器支持千问和商汤，其他自定义模型会先以 Mock 模式保存。
+后台“模型配置”还支持新增自定义模型。新模型默认未启用，接口为 `POST /api/admin/models`；目前真实 HTTP 适配器支持豆包、千问和商汤，其他自定义模型会先以 Mock 模式保存。
 
 自定义模型可以删除，但必须先停用且没有历史调用记录；内置的 SenseNova、Doubao、Qwen 模型不能删除，只能停用。
 
