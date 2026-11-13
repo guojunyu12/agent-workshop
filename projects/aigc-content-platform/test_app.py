@@ -571,6 +571,32 @@ def test_candidate_prompt_template_survives_approval(service):
     assert published["prompt_template"] == "品牌主色、圆润线条、主体清晰，预留短文字空间"
 
 
+def test_candidate_cannot_be_reviewed_twice(service):
+    candidate = service.ingest_candidate({
+        "module": "emoji", "title": "重复审核", "source_url": "https://example.com/review-once",
+    })
+    service.review_candidate(candidate["id"], "approved", "admin")
+    with pytest.raises(ValidationError, match="不能重复审核"):
+        service.review_candidate(candidate["id"], "approved", "admin")
+
+
+def test_batch_review_processes_selected_candidates_and_audits(service):
+    first = service.ingest_candidate({
+        "module": "emoji", "title": "批量猫", "source_url": "https://example.com/batch-cat",
+    })
+    second = service.ingest_candidate({
+        "module": "emoji", "title": "批量狗", "source_url": "https://example.com/batch-dog",
+    })
+    result = service.review_candidates_batch({
+        "candidate_ids": [first["id"], second["id"], first["id"]],
+        "decision": "approved", "reviewer": "admin", "reason": "批量确认",
+    })
+    assert result["total"] == 2
+    assert result["processed"] == 2 and result["failed"] == 0
+    assert all(item["status"] == "published" for item in service.candidates())
+    assert any(item["action"] == "candidate.batch_review" for item in service.audit_logs())
+
+
 def test_candidate_precheck_marks_risk_flags_without_auto_rejecting(service):
     candidate = service.ingest_candidate({
         "module": "emoji",

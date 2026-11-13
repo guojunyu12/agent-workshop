@@ -109,6 +109,8 @@ curl 'http://127.0.0.1:8000/api/admin/usage?provider=doubao&model_id=doubao-seed
 
 后台连接器的“检查配置”只校验启用状态、授权状态、接口地址和密钥环境变量是否就绪，不会发起同步请求，也不会返回 API Key。你可以先填写环境变量名，再自行把对应 Key 写入项目 `.env` 或启动环境，检查通过后再执行同步。
 
+审核队列支持勾选多个待审核候选模板后批量通过或拒绝；已处理的候选模板不能重复审核，避免重复创建正式模板。批量接口为 `POST /api/admin/templates/candidates/batch-review`。
+
 商汤 `SenseNova 6.8 Flash Lite` 可选择“商汤审核 Chat”，接口地址填写 `https://token.sensenova.cn/v1/chat/completions`。模板审核队列中的“AI 预审”只会保存 `passed/flagged` 结果供管理员参考，不会自动发布模板；接口为 `POST /api/admin/templates/candidates/{id}/ai-review`。
 
 模板抓取应优先接官方 API 或人工导入；未确认授权的平台不能直接做无授权页面抓取。官方 API 连接器可配置密钥环境变量名，密钥只从运行环境读取，不写入数据库。

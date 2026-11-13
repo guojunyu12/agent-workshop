@@ -881,6 +881,8 @@ class AIGCService:
             row = db.execute("SELECT * FROM candidates WHERE id=?", (candidate_id,)).fetchone()
             if not row:
                 raise ValidationError("候选模板不存在")
+            if row["status"] != "pending_review":
+                raise ValidationError("候选模板已经处理，不能重复审核")
             status = "published" if decision == "approved" else "rejected"
             db.execute("UPDATE candidates SET status=?, reviewer=?, reviewed_at=CURRENT_TIMESTAMP, review_reason=? WHERE id=?",
                        (status, reviewer, str(reason or "").strip()[:500], candidate_id))
@@ -901,6 +903,32 @@ class AIGCService:
                      "template_id": f"candidate-{candidate_id}" if decision == "approved" else ""})
         return {"id": candidate_id, "status": status, "reviewed_at": reviewed_at,
                 "publish_status": "internal_published" if decision == "approved" else "not_published"}
+
+    def review_candidates_batch(self, payload: dict) -> dict:
+        candidate_ids = payload.get("candidate_ids")
+        if not isinstance(candidate_ids, list) or not candidate_ids:
+            raise ValidationError("批量审核需要提供 candidate_ids 数组")
+        candidate_ids = list(dict.fromkeys(str(item).strip() for item in candidate_ids if str(item).strip()))
+        if len(candidate_ids) > 100:
+            raise ValidationError("单批最多审核 100 个候选模板")
+        decision = str(payload.get("decision") or "").strip()
+        reviewer = str(payload.get("reviewer") or "admin").strip() or "admin"
+        reason = str(payload.get("reason") or "").strip()[:500]
+        if decision not in {"approved", "rejected"}:
+            raise ValidationError("审核结论只能是 approved 或 rejected")
+        if decision == "rejected" and not reason:
+            raise ValidationError("批量拒绝需要填写原因")
+        results = []
+        for candidate_id in candidate_ids:
+            try:
+                results.append(self.review_candidate(candidate_id, decision, reviewer, reason))
+            except ValidationError as exc:
+                results.append({"id": candidate_id, "status": "error", "error": str(exc)})
+        processed = sum(item.get("status") in {"published", "rejected"} for item in results)
+        failed = len(results) - processed
+        self._audit("candidate.batch_review", "candidate_batch", ",".join(candidate_ids), reviewer,
+                    {"decision": decision, "processed": processed, "failed": failed})
+        return {"decision": decision, "total": len(results), "processed": processed, "failed": failed, "results": results}
 
     def publish_candidate(self, candidate_id: str, connector_id: str, actor: str = "admin") -> dict:
         connector_id = str(connector_id or "").strip()
@@ -1650,6 +1678,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._require_admin(payload); return self._send(201, self.service.ingest_candidates_batch(payload))
             if parsed.path == "/api/admin/review-runs/run":
                 self._require_admin(payload); return self._send(201, self.service.run_review_snapshot(payload))
+            if parsed.path == "/api/admin/templates/candidates/batch-review":
+                self._require_admin(payload); return self._send(200, self.service.review_candidates_batch(payload))
             match = re.fullmatch(r"/api/admin/templates/candidates/([^/]+)/review", parsed.path)
             if match:
                 self._require_admin(payload)
