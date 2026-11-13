@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>像素簿 · 用户端</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="rail">
+        <div class="brand-mark"><span>像</span><strong>像素簿</strong></div>
+        <div class="rail-kicker">AIGC IMAGE USER</div>
+        <nav class="nav" aria-label="用户端导航">
+          <button class="nav-item is-active" data-view="studio"><span class="nav-icon">✦</span>开始创作</button>
+          <button class="nav-item" data-view="templates"><span class="nav-icon">▦</span>模板库</button>
+          <button class="nav-item" data-view="history"><span class="nav-icon">↺</span>我的生成</button>
+        </nav>
+        <div class="rail-bottom">
+          <div class="quota"><span>今日额度</span><b id="quota-value">加载中…</b><div class="quota-bar"><i id="quota-progress"></i></div></div>
+          <button class="account"><span class="avatar">G</span><span><b>Guo</b><small>创作成员</small></span><span class="more">···</span></button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div><span class="crumb">用户端</span><span class="slash">/</span><strong id="view-title">开始创作</strong></div>
+          <div class="top-actions"><span class="sync-dot"></span><span>模型服务正常</span><a class="text-button" href="/admin">进入工作台 ↗</a></div>
+        </header>
+
+        <section class="view" id="studio-view">
+          <div class="intro-row">
+            <div><p class="eyebrow">从一个模板开始</p><h1>把想法，做成一张图。</h1><p class="lede">选好画布和模板，剩下的交给模型。每一次生成都会被保存到你的记录里。</p></div>
+            <div class="date-stamp">MON<br /><b>09</b><br />NOV · 2026</div>
+          </div>
+
+          <div class="studio-grid">
+            <section class="panel template-panel">
+              <div class="panel-head"><div><span class="section-no">01</span><h2>选择画布</h2></div><button class="quiet-button" id="see-all">查看全部</button></div>
+              <div class="module-tabs" role="tablist">
+                <button class="module-tab is-active" data-module="emoji">表情包 <small>1024 × 1024</small></button>
+                <button class="module-tab" data-module="mobile_wallpaper">手机壁纸 <small>1290 × 2796</small></button>
+                <button class="module-tab" data-module="desktop_wallpaper">电脑壁纸 <small>1920 × 1080</small></button>
+              </div>
+              <div class="template-grid" id="template-grid"></div>
+            </section>
+
+            <section class="panel controls-panel">
+              <div class="panel-head"><div><span class="section-no">02</span><h2>写下你的想法</h2></div><span class="model-state"><i></i>在线</span></div>
+              <label class="field-label" for="prompt">主题或画面要求</label>
+              <textarea id="prompt" rows="4" placeholder="例如：一只戴着黄色雨衣的小猫，表情有点得意"></textarea>
+              <label class="field-label" for="negative-prompt">不希望出现 <small class="field-hint">可选</small></label>
+              <input id="negative-prompt" placeholder="例如：模糊、低清晰度、文字、水印" />
+              <label class="field-label" for="reference-image">参考图片 <small class="field-hint">可选，支持 JPG / PNG，最大 10 MB</small></label>
+              <div class="reference-upload" id="reference-upload"><input id="reference-image" type="file" accept="image/png,image/jpeg,image/webp" /><div class="reference-empty" id="reference-empty"><span>＋</span><b>上传参考图片</b><small>拖入或点击选择图片</small></div><div class="reference-preview is-hidden" id="reference-preview"><img id="reference-preview-image" alt="参考图片预览" /><div><b id="reference-file-name"></b><small id="reference-file-size"></small></div><button type="button" id="clear-reference" aria-label="移除参考图片">×</button></div></div>
+              <div class="control-row"><div class="field"><div class="field-label-row"><label class="field-label" for="model_id">出图模型</label><span class="runtime-badge" id="model-runtime-badge">加载中…</span></div><select id="model_id" aria-label="出图模型"></select></div><div class="field"><label class="field-label" for="size">画布尺寸</label><select id="size"><option value="preset">模块推荐尺寸</option><option value="custom">自定义尺寸</option></select></div></div>
+              <div class="custom-size" id="custom-size"><input id="width" type="number" min="256" max="4096" placeholder="宽 1024" /><span>×</span><input id="height" type="number" min="256" max="4096" placeholder="高 1024" /></div>
+              <div class="selected-template" id="selected-template"><span class="tiny-thumb">✦</span><span><small>当前模板</small><b id="selected-template-title">通用表情包</b></span><button aria-label="清除模板" id="clear-template">×</button></div>
+              <button class="primary-button" id="generate-button"><span>生成图片</span><span>⌘ ↵</span></button>
+              <p class="form-note">本次预计消耗 <b>1 积分</b> · 生成结果会自动保存</p>
+            </section>
+          </div>
+          <section class="result-panel is-hidden" id="result-panel"><div><span class="result-label">生成完成</span><h2 id="result-title">你的图片已经准备好了</h2><p id="result-meta"></p></div><a id="result-link" class="secondary-button" target="_blank">打开图片 ↗</a></section>
+        </section>
+
+        <section class="view is-hidden" id="templates-view"><div class="page-heading"><div><p class="eyebrow">已发布素材</p><h1>模板库</h1></div><span class="page-note">选择模板后开始生成</span></div><div class="library-grid" id="library-grid"></div></section>
+        <section class="view is-hidden" id="history-view"><div class="page-heading"><div><p class="eyebrow">生成轨迹</p><h1>我的生成</h1></div><span class="page-note">最近生成结果</span></div><div id="history-grid" class="history-grid"></div></section>
+      </main>
+    </div>
+    <div class="toast" id="toast" role="status"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>
